@@ -1,4 +1,3 @@
-import math
 import re
 import time
 import pandas as pd
@@ -184,7 +183,9 @@ def get_articles():
 def get_all_alarms():
     alarms2018_2020 = pd.read_csv("RocketLaunchData1 2018-2020.csv")[['data', 'date', 'time']]
     alarms2021 = pd.read_csv("RocketLaunchData 2021.csv")[['data', 'date', 'time']]
-    return pd.concat([alarms2018_2020, alarms2021], axis=0)
+    res = pd.concat([alarms2018_2020, alarms2021], axis=0)
+    res.loc[(res["data"].str.contains('תל אביב')), 'data'] = 'תל אביב -יפו'
+    return res
 
 
 def get_peripheral_and_central_cities(all_alarms):
@@ -228,6 +229,8 @@ def get_articles_per_city(all_articles, alarms_by_date, articles_per_city):
             for city in articles_per_city:
                 if city in text or 'ל' + city in text:
                     articles_per_city[city].add(row[1][0])
+                elif city == 'תל אביב -יפו' and ('תל אביב' in text or 'לתל אביב' in text):
+                    articles_per_city[city].add(row[1][0])
     with open('articles_per_city.csv', 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         for entry in articles_per_city:
@@ -244,6 +247,7 @@ def get_alarms_per_city(alarms_by_date, all_alarms, articles_per_city):
             alarms_per_city[re.sub(r'[0-9]', '', city).strip()].add(date)
     with open('alarms_per_city.csv', 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
+        writer.writerow(["City", "Alarm dates", "Number of Alarms"])
         for entry in alarms_per_city:
             if articles_per_city[entry] == set():
                 articles_per_city[entry] = ""
@@ -251,12 +255,11 @@ def get_alarms_per_city(alarms_by_date, all_alarms, articles_per_city):
     return alarms_per_city
 
 
-def get_cities_info(code_by_city, religion_by_city, population_by_city, city_names):
+def get_cities_info(alarms_per_city, code_by_city, religion_by_city, population_by_city, city_names):
     general_data_2017 = pd.read_excel("נתונים כלליים 2017.xls")
     general_data_cities = general_data_2017[['שם יישוב']]
     city_failures = set()
     for city in alarms_per_city:
-        index = -1
         for general_data_city in general_data_cities.values:
             if city in general_data_city[0] or general_data_city[0] in city:
                 index = general_data_2017[general_data_2017['שם יישוב'] == general_data_city[0]].index[0]
@@ -273,14 +276,6 @@ def get_cities_info(code_by_city, religion_by_city, population_by_city, city_nam
     return code_by_city, religion_by_city, population_by_city, city_failures, city_names
 
 
-def get_natural_area_by_code():
-    index2017 = pd.read_excel("index2017.xlsx", sheet_name=3)
-    natural_area_by_code = {}
-    for row_num in range(2, len(index2017.iloc[:, 5])):
-        natural_area_by_code[index2017.iloc[row_num][5]] = index2017.iloc[row_num][2] if not None else ""
-    return natural_area_by_code
-
-
 def get_eshkols_dict():
     eshkols1 = pd.read_excel("אשכולות רשויות מקומיות.xlsx").iloc[5:, [2, 6]]
     eshkols1.rename(columns={'Unnamed: 2': 'Name', 'Unnamed: 6': 'Eshkol'}, inplace=True)
@@ -290,14 +285,50 @@ def get_eshkols_dict():
     return dict(zip(all_eshkols.Name, all_eshkols.Eshkol))
 
 
-# all_articles = get_articles()
+def is_in_shomer_homot(date):
+    split_date = date.split(".")
+    return 9 < int(split_date[0]) < 22 and int(split_date[1]) == 5 and int(split_date[2]) == 2021
 
-# remove these
-n12 = pd.read_csv("articles_N12.csv", header=None)
-ynet = pd.read_csv("articles_reshet13.csv", header=None)
-reshet13 = pd.read_csv("articles_reshet13.csv", header=None)
-all_articles = pd.concat([n12, ynet, reshet13], axis=0)
-#####
+
+def is_in_black_belt(date):
+    split_date = date.split(".")
+    return 11 < int(split_date[0]) < 17 and int(split_date[1]) == 11 and int(split_date[2]) == 2019
+
+
+def create_special_ops(all_articles, all_alarms, alarms_by_date, city_names):
+    shomer_homot_articles_per_city = {re.sub(r'[0-9]', '', city).strip(): set() for city in all_alarms.data}
+    shomer_homot_alarms_per_city = {re.sub(r'[0-9]', '', city).strip(): set() for city in all_alarms.data}
+    black_belt_articles_per_city = {re.sub(r'[0-9]', '', city).strip(): set() for city in all_alarms.data}
+    black_belt_alarms_per_city = {re.sub(r'[0-9]', '', city).strip(): set() for city in all_alarms.data}
+    for row in all_articles.iterrows():
+        if row[1][1] in alarms_by_date and (is_in_shomer_homot(row[1][1]) or is_in_black_belt(row[1][1])):
+            text = get_text_from_url(row[1][0])
+            for city in shomer_homot_articles_per_city:
+                if city in text or 'ל' + city in text:
+                    if is_in_shomer_homot(row[1][1]):
+                        shomer_homot_articles_per_city[city].add(row[1][0])
+                    if is_in_black_belt(row[1][1]):
+                        black_belt_articles_per_city[city].add(row[1][0])
+    for date in alarms_by_date:
+        if is_in_shomer_homot(date):
+            for city in alarms_by_date[date]:
+                shomer_homot_alarms_per_city[re.sub(r'[0-9]', '', city).strip()].add(date)
+        if is_in_black_belt(date):
+            for city in alarms_by_date[date]:
+                black_belt_alarms_per_city[re.sub(r'[0-9]', '', city).strip()].add(date)
+    with open('Shomer_Homot.csv', 'w', newline='', encoding='utf-8') as f:
+        with open('Black_Belt.csv', 'w', newline='', encoding='utf-8') as g:
+            Shomer_Homot_writer = csv.writer(f)
+            Black_Belt_writer = csv.writer(g)
+            Shomer_Homot_writer.writerow(["City", "Alarms", "Articles"])
+            Black_Belt_writer.writerow(["City", "Alarms", "Articles"])
+            for entry in articles_per_city:
+                Shomer_Homot_writer.writerow([city_names[entry], len(shomer_homot_alarms_per_city[entry]), len(shomer_homot_articles_per_city[entry])])
+                Black_Belt_writer.writerow([city_names[entry], len(black_belt_alarms_per_city[entry]),
+                                            len(black_belt_articles_per_city[entry])])
+
+
+all_articles = get_articles()
 
 all_alarms = get_all_alarms()
 articles_per_city = {re.sub(r'[0-9]', '', city).strip(): set() for city in all_alarms.data}
@@ -309,17 +340,20 @@ for index, row in all_alarms.iterrows():
 articles_per_city = get_articles_per_city(all_articles, alarms_by_date, articles_per_city)
 alarms_per_city = get_alarms_per_city(alarms_by_date, all_alarms, articles_per_city)
 
-natural_area_by_code = get_natural_area_by_code()
 code_by_city = {city: "" for city in alarms_per_city}
-code_by_city[''] = ""
+code_by_city[''] = -1
 religion_by_city = {city: "" for city in alarms_per_city}
 population_by_city = {city: "" for city in alarms_per_city}
 city_names = {city: "" for city in alarms_per_city}
-code_by_city, religion_by_city, population_by_city, city_failures, city_names = get_cities_info(code_by_city,
+code_by_city, religion_by_city, population_by_city, city_failures, city_names = get_cities_info(alarms_per_city,
+                                                                                                code_by_city,
                                                                                                 religion_by_city,
                                                                                                 population_by_city,
                                                                                                 city_names)
 eshkols_dict = get_eshkols_dict()
+
+create_special_ops(all_articles, all_alarms, alarms_by_date, city_names)
+
 with open("results.csv", 'w', encoding='utf-8') as f:
     writer = csv.writer(f)
     writer.writerow(["City", "Alarms", "Articles", "Natural Zone", "Population", "Religion", "Eshkol"])
@@ -327,8 +361,7 @@ with open("results.csv", 'w', encoding='utf-8') as f:
         name = city_names[city] if city in city_names else city
         alarms = len(alarms_per_city[city])
         articles = len(articles_per_city[city])
-        code = int(code_by_city[city]) if code_by_city[city] != '' and not math.isnan(code_by_city[city]) else None
-        area = natural_area_by_code[code] if code and not math.isnan(code) else -1
+        area = code_by_city[city] if city in code_by_city else -1
         population = population_by_city[city] if city in population_by_city else -1
         religion = religion_by_city[city] if city in religion_by_city else -1
         eshkol = eshkols_dict[city] if city in eshkols_dict else -1
